@@ -72,6 +72,12 @@ from . import accounting
 
 TIMEOUT_S = 180
 
+# The dsh call boots a full `dsh headless` host and then runs the profile's default model at its
+# default reasoning level (xhigh on the local NInfer gateway), which on a slow or half-cold
+# gateway can take several minutes. The call runs inside the plugin's already-detached fold, so a
+# longer bound only delays the failure note, never the user's session.
+DSH_TIMEOUT_S = 600
+
 
 def _env():
     return dict(os.environ, TE_SIDECALL="1")
@@ -416,7 +422,7 @@ def dsh_json_reply(stdout):
     return text, usage, model
 
 
-def dsh_call(prompt, model="", cli="dsh", overlay="", timeout=TIMEOUT_S):
+def dsh_call(prompt, model="", cli="dsh", overlay="", timeout=DSH_TIMEOUT_S):
     """A side call through `dsh headless`: the profile's own provider route and default model
     (the `--patch` overlay the caller passes names the provider and the model the call runs on),
     in a throwaway directory, on the caller's own credentials. `model` is a request the profile
