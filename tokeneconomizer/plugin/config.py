@@ -50,6 +50,11 @@ person can tune by hand:
                                    custom provider's, whose model they could not reach otherwise;
                                    comma-separated paths), and the `pi` they run;
   * hermes_cli                  -- on Hermes, the `hermes` the plugin's own model calls run;
+  * dsh_cli, dsh_overlay        -- on DeepSeek Harness, the `dsh` the plugin's own model calls
+                                    run, and the `--patch` overlay those calls boot with (the
+                                    profile that carries the provider's route and default model;
+                                    the bundle sets both, since a bare headless profile resolves
+                                    no provider);
   * history_import              -- on Claude Code, fold a repository's sessions from before the
                                    plugin (Claude Code's own logs) once, at its first session
                                    start, when nothing is folded there yet. Off by default:
@@ -177,6 +182,8 @@ class LiveConfig:
     pi_extensions: list = field(default_factory=list)
     pi_cli: str = ""
     hermes_cli: str = ""
+    dsh_cli: str = ""
+    dsh_overlay: str = ""
     history_import: bool = False
     history_max_sessions: int = 200
     history_days: int = 365
@@ -300,6 +307,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_REPOMAP_PYTHON": "repomap_python", "TE_REPOMAP_TIMEOUT": "repomap_timeout",
         "TE_PI_EXTENSIONS": "pi_extensions", "TE_PI_CLI": "pi_cli",
         "TE_HERMES_CLI": "hermes_cli",
+        "TE_DSH_CLI": "dsh_cli", "TE_DSH_OVERLAY": "dsh_overlay",
         "TE_HISTORY_IMPORT": "history_import", "TE_HISTORY_MAX_SESSIONS": "history_max_sessions",
         "TE_HISTORY_DAYS": "history_days", "TE_HISTORY_DIRS": "history_dirs"}
 _ENV_THRESHOLDS = ("TE_SPIRAL_THRESHOLDS", "TE_LOOPGUARD_THRESHOLDS")

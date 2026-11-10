@@ -813,13 +813,15 @@ def cmd_doctor(args):
         ok = False
     import shutil as _sh
     # Only the agents installed here: a Codex-only machine has no Claude Code catalog to probe.
-    agents = [h for h in ("antigravity", "claude", "codex", "copilot", "grok", "hermes", "opencode",
-                          "pi")
+    dsh_exe = os.path.expanduser(os.environ.get("TE_DSH_CLI") or "dsh")
+    agents = [h for h in ("antigravity", "claude", "codex", "copilot", "dsh", "grok", "hermes",
+                          "opencode", "pi")
               if _sh.which(sidecall.claude_cli() if h == "claude" else
                            sidecall.hermes_cli() if h == "hermes" else
+                           dsh_exe if h == "dsh" else
                            "agy" if h == "antigravity" else h)]
     print("agents      " + (', '.join(agents) or 'none of antigravity (agy), claude, codex, '
-                             'copilot, grok, hermes, opencode, pi on PATH'))
+                             'copilot, dsh, grok, hermes, opencode, pi on PATH'))
     for h in agents:
         pause = sidecall.paused(h, root)
         if pause:

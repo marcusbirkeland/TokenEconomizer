@@ -45,6 +45,13 @@ so no extra API key is needed and the call is billed where the session is:
     call's prompt holds text a repository controls, and this form offers it no tool. See
     `hermes_call` for why `TE_SIDECALL` is not how it avoids the plugin's hooks.
 
+  * DSH: `dsh --profile headless [--patch <overlay>] --json -`, the prompt on stdin -- the
+    profile the overlay boots (its provider route and default model) under the caller's
+    credentials: the call runs as a child of the profile's host, which is where the provider's
+    key lives. Answer and per-step token breakdown come out on stdout as NDJSON run events. The
+    side call's own profile carries no plugin, and `TE_SIDECALL=1` guards it in case one is
+    added.
+
 Every side call but Hermes's runs with `TE_SIDECALL=1`, which the plugin's hook entry point treats as "do
 nothing": without it the nested agent would run this plugin's hooks and recurse. A call that
 returns no reply -- a CLI that is not signed in, say -- leaves one line in the plugin's
@@ -71,8 +78,10 @@ def _env():
 
 
 # What a CLI says when it is not signed in -- Copilot's "To authenticate, ... run the '/login'
-# command" under BYOK, Claude Code's "Please run /login".
-_SIGNED_OUT_RE = re.compile(r"To authenticate|/login\b|\b[Nn]ot (?:logged|signed) in")
+# command" under BYOK, Claude Code's "Please run /login", DSH's "no credential for provider
+# route" / "no adapter registered for provider" when its route's key is unset.
+_SIGNED_OUT_RE = re.compile(r"To authenticate|/login\b|\b[Nn]ot (?:logged|signed) in"
+                            r"|no credential for provider route|no adapter registered for provider")
 
 
 def _log(text):
@@ -368,6 +377,62 @@ def pi_call(prompt, model="", cli="pi", timeout=TIMEOUT_S, extensions=()):
     if usage:
         usage.pop("cost_usd", None)
         usage["model"] = usage.get("model") or model or "pi"
+        eff, _ = accounting.effective(usage)
+    return text, eff
+
+
+def dsh_json_reply(stdout):
+    """(text, usage, model) of a `dsh headless --json` run: the last text the run produced, the
+    token breakdown of every step (DSH's camelCase fields), and the model its `model/selection`
+    event names. `usage` is None when the run produced no step with one."""
+    text, model = "", ""
+    usage = None
+    for line in (stdout or "").splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        t = ev.get("type")
+        if t == "text" and isinstance(ev.get("text"), str):
+            text = ev["text"]
+        elif t == "final" and isinstance(ev.get("text"), str) and ev["text"]:
+            text = ev["text"]
+        elif t == "model/selection":
+            d = ev.get("data") or {}
+            if d.get("model"):
+                model = d["model"]
+        elif t == "status" and ev.get("phase") == "step_end":
+            u = ev.get("usage")
+            if isinstance(u, dict) and u.get("inputTokens") is not None:
+                rec = {"input_tokens": int(u.get("inputTokens") or 0),
+                       "cache_read_input_tokens": int(u.get("cacheReadTokens") or 0),
+                       "cache_creation_input_tokens": int(u.get("cacheWriteTokens") or 0),
+                       "output_tokens": int(u.get("outputTokens") or 0)}
+                usage = usage or dict.fromkeys(rec, 0)
+                for k, v in rec.items():
+                    usage[k] += v
+    return text, usage, model
+
+
+def dsh_call(prompt, model="", cli="dsh", overlay="", timeout=TIMEOUT_S):
+    """A side call through `dsh headless`: the profile's own provider route and default model
+    (the `--patch` overlay the caller passes names the provider and the model the call runs on),
+    in a throwaway directory, on the caller's own credentials. `model` is a request the profile
+    may not honor -- the overlay's default wins -- and is only recorded beside the breakdown."""
+    exe = program(cli)
+    patch = ["--patch", os.path.abspath(os.path.expanduser(overlay))] if overlay else []
+    with tempfile.TemporaryDirectory(prefix="te-side-", ignore_cleanup_errors=True) as cwd:
+        cmd = [*exe, "--profile", "headless", *patch, "--json", "-"]
+        out = subprocess.run(cmd, input=prompt, capture_output=True, encoding="utf-8",
+                             errors="replace", timeout=timeout, env=_env(), cwd=cwd)
+    text, usage, used = dsh_json_reply(out.stdout)
+    if not text:
+        _no_reply("dsh", out)
+    eff = None
+    if usage:
+        usage["model"] = used or model or "dsh"
         eff, _ = accounting.effective(usage)
     return text, eff
 
@@ -744,7 +809,7 @@ NO_SIDE_CALLS = frozenset({"antigravity"})
 
 # The command each agent's side calls run, as the notices name it; the rest run `<agent> -p`.
 _CALLS = {"codex": "codex exec", "opencode": "opencode run", "cursor": "cursor-agent -p",
-          "hermes": "hermes chat"}
+          "hermes": "hermes chat", "dsh": "dsh headless"}
 
 
 def call_name(host_name):
@@ -779,6 +844,11 @@ def _host_call(host_name, config):
     if host_name == "hermes":
         cli = os.path.expanduser(config.hermes_cli) if config.hermes_cli else None
         return lambda prompt, _m="agent": hermes_call(prompt, model=model, cli=cli)
+    if host_name == "dsh":
+        cli = os.path.expanduser(config.dsh_cli) if config.dsh_cli else "dsh"
+        overlay = os.path.expanduser(config.dsh_overlay) if config.dsh_overlay else ""
+        return lambda prompt, _m="agent": dsh_call(prompt, model=model, cli=cli,
+                                                   overlay=overlay)
     if host_name == "codex":
         return lambda prompt, _m="agent": codex_call(prompt, model=model)
     if host_name == "copilot":
