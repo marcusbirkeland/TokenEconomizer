@@ -434,6 +434,49 @@ class Pi(Host):
         return trace.pi_session_usage(transcript_path)
 
 
+class Dsh(Host):
+    """DeepSeek Harness, through the plugin in the dsh-config repository.
+
+    DSH has no hook protocol of its own -- a Cordis bundle in the profile is the plugin, exactly
+    as the Pi extension is here: it speaks THIS protocol on DSH's behalf, one call of the shared
+    dispatcher (`te-hook --host dsh`, JSON in, JSON out) per event, and applies the answer with
+    DSH's own levers (a `tokeneconomizer` system-prompt section the bundle keeps for the
+    session; a detached fold when the session ends). All of the mechanism logic lives in the
+    dispatcher; the bundle only translates. What it sends:
+
+      * `prompt_id`, which it numbers itself, for the turn identity DSH does not stamp;
+      * `transcript_path`, the session's export as a Claude-format JSONL that the bundle's
+        adapter writes from DSH's zstd-compressed session log when the session ends -- DSH's own
+        log is not a format the plugin reads (one `session.v4.jsonl.zstd` per session, whose
+        events are `user/message`, `assistant/message`, `tool/call`, `tool/result`);
+      * DSH's mode in `TE_DSH_MODE` on the hook's environment: `tty` (the attended Web UI) or
+        `headless`; `TE_DSH=1` marks the hook's process.
+
+    Like the other extensions it fails open, and does nothing under `TE_SIDECALL=1` (the
+    bundle's own side calls run `dsh headless` on a profile that carries no plugin anyway).
+    """
+    name = "dsh"
+    prompt_context = True              # the section the bundle registers per assembly
+    interrupt = "Stop the session from its surface."
+    end_run = "End the run."
+
+    def turn_key(self, p):
+        return str(p.get("prompt_id") or "")
+
+    def headless(self, env, transcript=None):
+        return str(env.get("TE_DSH_MODE", "")).strip() == "headless"
+
+    def session_usage(self, transcript_path):
+        return trace.claude_session_usage(transcript_path)
+
+    def prompt_count(self, transcript_path):
+        return trace.claude_prompt_count(transcript_path)
+
+    # `keeps_history = False` and the base `mechanism_trace` / `tool_usage`: DSH's own logs are
+    # compressed and the plugin never reads them; the bundle reports every session it sees, and
+    # the export it sends is Claude-shaped, so the base's Claude-format readers read it.
+
+
 class OpenCode(Host):
     """opencode (anomalyco/opencode), through the plugin in `plugin/opencode/`.
 
@@ -1193,7 +1236,7 @@ def _ancestor_args(limit=4):
 
 HOSTS = {"claude": ClaudeCode, "codex": Codex, "copilot": Copilot, "opencode": OpenCode,
          "pi": Pi, "cursor": Cursor, "hermes": Hermes, "grok": Grok,
-         "antigravity": Antigravity}
+         "antigravity": Antigravity, "dsh": Dsh}
 
 
 def default_host(env=None, recent=None):
@@ -1204,6 +1247,8 @@ def default_host(env=None, recent=None):
     env = os.environ if env is None else env
     if env.get("TE_HOST") in HOSTS:
         return env["TE_HOST"]
+    if env.get("TE_DSH") == "1":
+        return "dsh"
     if env.get("CLAUDECODE") == "1":
         return "claude"
     if env.get("COPILOT_CLI") == "1":
@@ -1219,6 +1264,8 @@ def detect(payload, env=None, hint=None):
     """The adapter for this hook call: an explicit `hint`, else inferred from the payload."""
     if hint in HOSTS:
         return HOSTS[hint]()
+    if (env or {}).get("TE_DSH") == "1":
+        return Dsh()
     if (payload or {}).get("conversationId") and "/antigravity" in str(
             payload.get("transcriptPath") or "").replace("\\", "/"):
         return Antigravity()
